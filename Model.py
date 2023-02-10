@@ -110,5 +110,77 @@ class Discriminator(nn.Module):
         output = self.main(input)
         return output
 
+# move networks to device and intialize parametric layers
+generator = Generator().to(device='cpu')
+generator.apply(weights_init)
+discriminator = Discriminator().to(device='cpu')
+discriminator.apply(weights_init)
+
+# loss function
+adversarial_loss = nn.BCELoss()
+
+# generator loss function which is fed discriminator output (when fed generated-produced images) and ground truth label (1)
+def generator_loss(fake_output, label):
+    gen_loss = adversarial_loss(fake_output, label)
+    return gen_loss
+
+# discriminator loss function which is called twice:
+# once with real (original images) output predictions and label 1 
+# again with fake (generated images) output predictions and label 0
+def discriminator_loss(output, label):
+    disc_loss = adversarial_loss(output, label)
+    return disc_loss
+
+# intialize optimizer
+learning_rate = 0.0002
+G_optimizer = optim.Adam(generator.parameters(), lr = learning_rate, betas=(0.5, 0.999))
+D_optimizer = optim.Adam(discriminator.parameters(), lr = learning_rate, betas=(0.5, 0.999))
+
+# training the networks 
+for epoch in range(1, num_epochs+1): 
+    D_loss_list, G_loss_list = [], []
+    
+    # iterate through images in dataset
+    for index, (real_images, _) in enumerate(train_loader):
+
+        D_optimizer.zero_grad()
+        real_images = real_images.to(device='cpu')
+        
+        real_target = Variable(torch.ones(real_images.size(0)).to(device='cpu'))
+        fake_target = Variable(torch.zeros(real_images.size(0)).to(device='cpu'))
+
+        # feed discriminator the real images
+        output = discriminator(real_images)
+        D_real_loss = discriminator_loss(output, real_target)
+        D_real_loss.backward()
+
+        # sample noise vectors
+        noise_vector = torch.randn(real_images.size(0), 100, 1, 1, device='cpu')  
+        noise_vector = noise_vector.to(device='cpu')
+
+        # pass noise vectors through the generator
+        generated_image = generator(noise_vector)
+
+        # feed fake (generated) images to the discriminator
+        output = discriminator(generated_image.detach())
+        D_fake_loss = discriminator_loss(output,fake_target)
+        D_fake_loss.backward()
+
+        # optimize discriminator with total loss from fake and real images
+        D_total_loss = D_real_loss + D_fake_loss
+        D_loss_list.append(D_total_loss)
+        D_optimizer.step()
+
+        # generated images from earlier are passed to optimized (updated parameters) discriminator network
+        G_optimizer.zero_grad()
+        gen_output = discriminator(generated_image)
+
+        # calculate loss and optimize generator parameters
+        G_loss = generator_loss(gen_output, real_target)
+        G_loss_list.append(G_loss)
+        G_loss.backward()
+        G_optimizer.step()
+
+
 
 
