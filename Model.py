@@ -8,18 +8,47 @@ from torch.autograd import Variable
 from torch.utils.data.dataloader import DataLoader
 from torchvision.utils import save_image
 from torchvision.utils import make_grid
+import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter 
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from IPython.display import HTML
 
-# loading and preprocessing data
+# number of gpu available 
+ngpu = 1
+
+# device we want to run on
+# device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
+device = torch.device("cpu")
+
+# number of training epochs 
+num_epochs = 1
+
+# batch size during training
+batch_size = 128
+
+# size of z latent vector
+nz = 100
+
+# learning rate for optimizer
+learning_rate = 0.0002
 
 # resize images to fixed size, convert image to tensor, normalize pixel image from [0, 255] to [-1, 1]
 train_transform = transforms.Compose([transforms.Resize((64, 64)), transforms.ToTensor(), transforms.Normalize([.5, .5, .5], [.5, .5, .5])])
 
 # import data and apply transformations
-train_data = datasets.ImageFolder(root='faces', transform=train_transform)
+train_data = datasets.ImageFolder(root='~joshbarua/DLProjects/Anime-Face-Generator/data', transform=train_transform)
 
 # create iterable over faces dataset
 train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
+
+# plot training images
+real_batch = next(iter(train_loader))
+plt.figure(figsize=(8,8))
+plt.axis("off")
+plt.title("Training Images")
+plt.imshow(np.transpose(vutils.make_grid(real_batch[0].to(device)[:64], padding=2, normalize=True).cpu(),(1,2,0)))
+plt.show()
 
 # custom weights initialization function for generator and discriminator layers
 def weights_init(m):
@@ -41,7 +70,7 @@ class Generator(nn.Module):
         self.main = nn.Sequential(
 
             # block 1: input is Z, going into a convolution
-            nn.ConvTranspose2d(latent_dim, 64 * 8, 4, 1, 0, bias=False),
+            nn.ConvTranspose2d(nz, 64 * 8, 4, 1, 0, bias=False),
             nn.BatchNorm2d(64 * 8),
             nn.ReLU(True),
 
@@ -111,9 +140,9 @@ class Discriminator(nn.Module):
         return output
 
 # move networks to device and intialize parametric layers
-generator = Generator().to(device='cpu')
+generator = Generator().to(device)
 generator.apply(weights_init)
-discriminator = Discriminator().to(device='cpu')
+discriminator = Discriminator().to(device)
 discriminator.apply(weights_init)
 
 # loss function
@@ -132,7 +161,6 @@ def discriminator_loss(output, label):
     return disc_loss
 
 # intialize optimizer
-learning_rate = 0.0002
 G_optimizer = optim.Adam(generator.parameters(), lr = learning_rate, betas=(0.5, 0.999))
 D_optimizer = optim.Adam(discriminator.parameters(), lr = learning_rate, betas=(0.5, 0.999))
 
@@ -141,28 +169,34 @@ for epoch in range(1, num_epochs+1):
     D_loss_list, G_loss_list = [], []
     
     # iterate through images in dataset
-    for index, (real_images, _) in enumerate(train_loader):
+    count = 1
+    for index, real_images in enumerate(train_loader, 0):
+        print("Batch: " + str(count))
+        count += 1
 
         D_optimizer.zero_grad()
-        real_images = real_images.to(device='cpu')
+        real_images = real_images[0].to(device)
+        b_size = real_images.size(0)
         
-        real_target = Variable(torch.ones(real_images.size(0)).to(device='cpu'))
-        fake_target = Variable(torch.zeros(real_images.size(0)).to(device='cpu'))
+        real_target = Variable(torch.ones(b_size).to(device))
+        fake_target = Variable(torch.zeros(b_size).to(device))
 
         # feed discriminator the real images
-        output = discriminator(real_images)
+        output = discriminator.forward(real_images)
+        real_target = real_target.view(-1,1)
         D_real_loss = discriminator_loss(output, real_target)
         D_real_loss.backward()
 
         # sample noise vectors
-        noise_vector = torch.randn(real_images.size(0), 100, 1, 1, device='cpu')  
-        noise_vector = noise_vector.to(device='cpu')
+        noise_vector = torch.randn(b_size, 100, 1, 1, device=device) 
+        noise_vector = noise_vector.to(device)
 
         # pass noise vectors through the generator
-        generated_image = generator(noise_vector)
+        generated_image = generator.forward(noise_vector)
 
         # feed fake (generated) images to the discriminator
-        output = discriminator(generated_image.detach())
+        output = discriminator.forward(generated_image.detach())
+        fake_target = fake_target.view(-1,1)
         D_fake_loss = discriminator_loss(output,fake_target)
         D_fake_loss.backward()
 
@@ -173,7 +207,7 @@ for epoch in range(1, num_epochs+1):
 
         # generated images from earlier are passed to optimized (updated parameters) discriminator network
         G_optimizer.zero_grad()
-        gen_output = discriminator(generated_image)
+        gen_output = discriminator.forward(generated_image)
 
         # calculate loss and optimize generator parameters
         G_loss = generator_loss(gen_output, real_target)
