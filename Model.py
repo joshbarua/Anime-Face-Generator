@@ -12,7 +12,8 @@ import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from IPython.display import HTML
+from IPython.display import HTML, display
+from torchsummary import summary
 
 # number of gpu available 
 ngpu = 1
@@ -22,7 +23,7 @@ ngpu = 1
 device = torch.device("cpu")
 
 # number of training epochs 
-num_epochs = 1
+num_epochs = 3
 
 # batch size during training
 batch_size = 128
@@ -32,6 +33,9 @@ nz = 100
 
 # learning rate for optimizer
 learning_rate = 0.0002
+
+# number of GPUs available, use 0 for CPU mode
+ngpu = 1
 
 # resize images to fixed size, convert image to tensor, normalize pixel image from [0, 255] to [-1, 1]
 train_transform = transforms.Compose([transforms.Resize((64, 64)), transforms.ToTensor(), transforms.Normalize([.5, .5, .5], [.5, .5, .5])])
@@ -48,7 +52,6 @@ plt.figure(figsize=(8,8))
 plt.axis("off")
 plt.title("Training Images")
 plt.imshow(np.transpose(vutils.make_grid(real_batch[0].to(device)[:64], padding=2, normalize=True).cpu(),(1,2,0)))
-plt.show()
 
 # custom weights initialization function for generator and discriminator layers
 def weights_init(m):
@@ -144,9 +147,14 @@ generator = Generator().to(device)
 generator.apply(weights_init)
 discriminator = Discriminator().to(device)
 discriminator.apply(weights_init)
+summary(generator, (100, 64, 64))
+summary(discriminator, (3, 64, 64))
 
 # loss function
 adversarial_loss = nn.BCELoss()
+
+# create batch of latent vectors that we will use to visualize the progression of the generator
+fixed_noise = torch.randn(64, nz, 1, 1, device=device)
 
 # generator loss function which is fed discriminator output (when fed generated-produced images) and ground truth label (1)
 def generator_loss(fake_output, label):
@@ -164,38 +172,41 @@ def discriminator_loss(output, label):
 G_optimizer = optim.Adam(generator.parameters(), lr = learning_rate, betas=(0.5, 0.999))
 D_optimizer = optim.Adam(discriminator.parameters(), lr = learning_rate, betas=(0.5, 0.999))
 
+#lists to keep track of progress 
+img_list = []
+G_loss_list = []
+D_loss_list = []
+iters = 0
+
 # training the networks 
-for epoch in range(1, num_epochs+1): 
-    D_loss_list, G_loss_list = [], []
+print("Starting Training Loop...")
+for epoch in range(num_epochs): 
     
     # iterate through images in dataset
-    count = 1
-    for index, real_images in enumerate(train_loader, 0):
-        print("Batch: " + str(count))
-        count += 1
+    for index, data in enumerate(train_loader, 0):
+        print(iters)
 
         D_optimizer.zero_grad()
-        real_images = real_images[0].to(device)
+        real_images = data[0].to(device)
         b_size = real_images.size(0)
         
         real_target = Variable(torch.ones(b_size).to(device))
         fake_target = Variable(torch.zeros(b_size).to(device))
 
         # feed discriminator the real images
-        output = discriminator.forward(real_images)
+        output = discriminator(real_images)
         real_target = real_target.view(-1,1)
         D_real_loss = discriminator_loss(output, real_target)
         D_real_loss.backward()
 
         # sample noise vectors
-        noise_vector = torch.randn(b_size, 100, 1, 1, device=device) 
-        noise_vector = noise_vector.to(device)
+        noise_vector = torch.randn(b_size, nz, 1, 1, device=device) 
 
         # pass noise vectors through the generator
-        generated_image = generator.forward(noise_vector)
+        generated_images = generator(noise_vector)
 
         # feed fake (generated) images to the discriminator
-        output = discriminator.forward(generated_image.detach())
+        output = discriminator(generated_images.detach())
         fake_target = fake_target.view(-1,1)
         D_fake_loss = discriminator_loss(output,fake_target)
         D_fake_loss.backward()
@@ -207,13 +218,28 @@ for epoch in range(1, num_epochs+1):
 
         # generated images from earlier are passed to optimized (updated parameters) discriminator network
         G_optimizer.zero_grad()
-        gen_output = discriminator.forward(generated_image)
+        gen_output = discriminator(generated_images)
 
         # calculate loss and optimize generator parameters
         G_loss = generator_loss(gen_output, real_target)
         G_loss_list.append(G_loss)
         G_loss.backward()
         G_optimizer.step()
+
+        # check how the generator is doing by saving generated output on fixed noise
+        if (iters % 250 == 0) or ((epoch == num_epochs-1) and (index == len(train_loader)-1)):
+            with torch.no_grad():
+                fake = generator(fixed_noise).detach().cpu()
+            img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
+
+        iters += 1
+
+print("done")
+fig = plt.figure(figsize=(8,8))
+plt.axis("off")
+ims = [[plt.imshow(np.transpose(i,(1,2,0)), animated=True)] for i in img_list]
+ani = animation.ArtistAnimation(fig, ims, interval=1000, repeat_delay=1000, blit=True)
+plt.show()
 
 
 
